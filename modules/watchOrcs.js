@@ -17,10 +17,10 @@ const path = require('path');
 const COLLECTION_ADDRESS = '0:463685d77d0474ec774386d92622ed688d34f07230741211d838c487dcfeec64';
 const LIMIT = 1;       // проверяем по 1 NFT
 const MAX_SEND = 1;    // сколько NFT отправляем за раз
-const CHECK_INTERVAL = 5000; // проверка раз в минуту
+const CHECK_INTERVAL = 5_000; // проверка раз в минуту
 const STATE_FILE = path.join(DATA_DIR, 'watch_orcs_state.json');
 
-let OFFSET = 26700; // стартовый offset
+let OFFSET = 26800; // стартовый offset
 let watcherStarted = false;
 let intervalId = null;
 
@@ -130,13 +130,14 @@ async function checkNewOrcs(bot, chatId) {
       const nft = item.metadata;
       const nftName = nft.name || 'No Name';
       const nftIndex = item.index || OFFSET;
-      
+      const nftAttributes = item.metadata.attributes.map(item => `${item.trait_type} - ${item.value}`).reverse().join('\n')
+
       // Создаем подпись без Markdown разметки
       const caption = `🧟‍♂️ НОВЫЙ NFT!\n\n` +
                      `Название: ${safeMarkdown(nftName)}\n` +
-                     `Индекс: #${nftIndex}\n` +
-                     `Обнаружен: ${formatDate(new Date())}\n\n` +
-                     `🎯 Атрибут: Skin Tone`;
+										 `\n${nftAttributes}\n` +
+                     `\nИндекс: #${nftIndex}\n` +
+                     `Обнаружен: ${formatDate(new Date())}\n\n`
       
       console.log(`📤 Отправка NFT: ${nftName} (#${nftIndex})`);
       

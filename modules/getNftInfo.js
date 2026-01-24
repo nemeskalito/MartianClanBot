@@ -11,7 +11,7 @@ const fs = require('fs').promises;
 const path = require('path');
 
 // Константы для этой команды
-const LIMIT_TONCENTER = 10; // Получаем 10 NFT за раз
+const LIMIT_TONCENTER = 100; // Получаем 10 NFT за раз
 
 async function fetchNftInfoDetailed() {
   try {
@@ -43,14 +43,22 @@ async function fetchNftInfoDetailed() {
       // 2. Запрос - получаем user_friendly адрес NFT
       const url2 = `https://toncenter.com/api/v3/addressBook?address=${encodeURIComponent(nftAddress)}`;
       
-      let nftUserFriendly = nftAddress;
+      let nftUserFriendly = nftAddress; // Значение по умолчанию
       try {
         const data2 = await makeTonCenterRequest(url2);
-        if (data2 && data2.user_friendly) {
+        
+        // Исправляем парсинг ответа
+        if (data2 && data2[nftAddress]) {
+          nftUserFriendly = data2[nftAddress].user_friendly || nftAddress;
+        } else if (data2 && data2.user_friendly) {
+          // Альтернативный формат ответа
           nftUserFriendly = data2.user_friendly;
         }
+        
+        console.log(`📝 User-friendly адрес NFT: ${nftUserFriendly}`);
+        
       } catch (err2) {
-        console.log(`⚠️ Ошибка запроса для NFT ${i + 1}:`, err2.message);
+        console.log(`⚠️ Ошибка запроса addressBook для NFT ${i + 1}:`, err2.message);
       }
       
       // 3. Запрос - получаем метаданные
@@ -74,7 +82,7 @@ async function fetchNftInfoDetailed() {
             nftIndex = tokenInfo.nft_index || 'Не указано';
             
             if (tokenInfo.extra) {
-              imageUrl = tokenInfo.extra._image_big || tokenInfo.extra._image_medium || tokenInfo.image || '';
+              imageUrl = tokenInfo.extra._image_medium || tokenInfo.extra._image_small || '';
               attributes = tokenInfo.extra.attributes || [];
             }
           }
@@ -90,12 +98,11 @@ async function fetchNftInfoDetailed() {
         }
       }
       
-      // Формируем результат для этого NFT
+      // Формируем результат для этого NFT (без поля index)
       results.push({
         success: true,
         data: {
           address: nftAddress,
-          index: nft.index,
           owner_address: ownerAddress,
           last_transaction_lt: nft.last_transaction_lt,
           on_sale: nft.on_sale,
@@ -131,7 +138,7 @@ async function fetchNftInfoDetailed() {
   }
 }
 
-async function saveNftInfoToFile(nftDataArray, userInfo = {}) {
+async function saveNftInfoToFile(nftDataArray) {
   try {
     // Убеждаемся что папка существует
     await ensureDataDir();
@@ -164,10 +171,9 @@ async function saveNftInfoToFile(nftDataArray, userInfo = {}) {
       
       const nftData = nftResult.data;
       
-      // Создаем запись
+      // Создаем запись с timestamp
       const entry = {
         timestamp: new Date().toISOString(),
-        user: userInfo,
         ...nftData
       };
       
@@ -180,17 +186,21 @@ async function saveNftInfoToFile(nftDataArray, userInfo = {}) {
         
         // Проверяем, изменились ли данные
         let dataChanged = false;
-        const importantFields = ['name', 'nft_index', 'owner_address', 'on_sale'];
+        const importantFields = ['name', 'nft_index', 'owner_address', 'on_sale', 'nft_user_friendly'];
         
         for (const field of importantFields) {
           if (existingNft[field] !== nftData[field]) {
             dataChanged = true;
+            console.log(`🔄 Изменение поля ${field}: "${existingNft[field]}" -> "${nftData[field]}"`);
           }
         }
         
         // Проверяем атрибуты
-        if (JSON.stringify(existingNft.attributes) !== JSON.stringify(nftData.attributes)) {
+        const existingAttrsStr = JSON.stringify(existingNft.attributes);
+        const newAttrsStr = JSON.stringify(nftData.attributes);
+        if (existingAttrsStr !== newAttrsStr) {
           dataChanged = true;
+          console.log(`🔄 Изменились атрибуты`);
         }
         
         if (dataChanged) {
@@ -201,7 +211,6 @@ async function saveNftInfoToFile(nftDataArray, userInfo = {}) {
           
           existingNft.updateHistory.push({
             timestamp: existingNft.timestamp,
-            user: existingNft.user
           });
           
           // Обновляем данные
@@ -237,7 +246,6 @@ async function saveNftInfoToFile(nftDataArray, userInfo = {}) {
     // Сохраняем временный файл с результатами
     const tempData = {
       timestamp: new Date().toISOString(),
-      user: userInfo,
       stats: stats,
       nfts: nftDataArray.filter(r => r.success).map(r => r.data)
     };
@@ -299,16 +307,8 @@ async function handleGetNftsInfo(bot, msg) {
       );
     }
 
-    // Подготавливаем информацию о пользователе
-    const userInfo = {
-      username: username,
-      userId: userId,
-      firstName: msg.from.first_name || '',
-      lastName: msg.from.last_name || ''
-    };
-
-    // Сохраняем данные в файл
-    const saveResult = await saveNftInfoToFile(fetchResult.results, userInfo);
+    // Сохраняем данные в файл (без информации о пользователе)
+    const saveResult = await saveNftInfoToFile(fetchResult.results);
     
     if (!saveResult.success) {
       return bot.sendMessage(

@@ -1,170 +1,130 @@
 const { 
-  MAIN_DATA_FILE,
-  ensureDataDir,
-  truncateText
+  ensureDataDir
 } = require('./utils.js');
 const fs = require('fs').promises;
+const path = require('path');
 
 // Константы для отображения карточек
-const CARDS_PER_MESSAGE = 3; // Сколько карточек показывать за раз
-const MAX_ATTRIBUTES_PER_LINE = 2;
+const CARDS_PER_MESSAGE = 1;
+const BOT_CARDS_FILE = path.join(__dirname, '../nft_data/bot_nft_cards.json');
 
 /**
- * Форматирует атрибуты для отображения в карточке
+ * Получает карточки NFT из файла bot_nft_cards.json
  */
-function formatAttributes(attributes) {
-  if (!attributes || !Array.isArray(attributes) || attributes.length === 0) {
-    return ['Нет атрибутов', ''];
-  }
-  
-  // Разбиваем атрибуты на строки по 2 в каждой
-  const lines = [];
-  for (let i = 0; i < attributes.length; i += MAX_ATTRIBUTES_PER_LINE) {
-    const lineAttributes = attributes.slice(i, i + MAX_ATTRIBUTES_PER_LINE);
-    const lineText = lineAttributes
-      .map(attr => {
-        const value = truncateText(attr.value, 15);
-        return `• ${attr.trait_type}: ${value}`;
-      })
-      .join('    ');
-    lines.push(lineText);
-  }
-  
-  // Если строк меньше 2, добавляем пустые
-  while (lines.length < 2) {
-    lines.push('');
-  }
-  
-  return lines.slice(0, 2);
-}
-
-/**
- * Создает карточку NFT в формате с рамкой
- */
-function createNftCard(nft, index, total) {
-  const attributesLines = formatAttributes(nft.attributes);
-  
-  // Экранируем специальные символы
-  const escapeText = (text) => {
-    if (!text) return '';
-    return text.toString().replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-  };
-  
-  const nftName = escapeText(nft.name || `NFT #${nft.nft_index || index}`);
-  
-  // Формируем рамку вокруг карточки
-  const topBorder = '┏' + '━'.repeat(38) + '┓';
-  const bottomBorder = '┗' + '━'.repeat(38) + '┛';
-  const sideBorder = '┃';
-  
-  const cardNumber = total > 1 ? `🎴 Карточка ${index + 1} из ${total}` : '🎴 Карточка NFT';
-  
-  // Формируем карточку
-  let card = `${topBorder}\n`;
-  card += `${sideBorder} ${cardNumber} ${sideBorder}\n`;
-  card += `${sideBorder}                                          ${sideBorder}\n`;
-  card += `${sideBorder} ${nftName} ${sideBorder}\n`;
-  card += `${sideBorder}                                          ${sideBorder}\n`;
-  
-  if (nft.image_url) {
-    card += `${sideBorder} 🖼️ Есть изображение ${sideBorder}\n`;
-  } else {
-    card += `${sideBorder} 🖼️ Нет изображения ${sideBorder}\n`;
-  }
-  
-  card += `${sideBorder}                                          ${sideBorder}\n`;
-  
-  if (attributesLines[0]) {
-    // Ограничиваем длину строки для рамки
-    const line1 = attributesLines[0].length > 35 ? attributesLines[0].substring(0, 32) + '...' : attributesLines[0];
-    card += `${sideBorder} ${line1} ${sideBorder}\n`;
-  }
-  
-  if (attributesLines[1]) {
-    const line2 = attributesLines[1].length > 35 ? attributesLines[1].substring(0, 32) + '...' : attributesLines[1];
-    card += `${sideBorder} ${line2} ${sideBorder}\n`;
-  }
-  
-  card += `${sideBorder}                                          ${sideBorder}\n`;
-  
-  if (nft.getgems_url) {
-    card += `${sideBorder} 🌐 На GetGems ${sideBorder}\n`;
-  }
-  
-  if (nft.owner_url) {
-    card += `${sideBorder} 👤 Владелец ${sideBorder}\n`;
-  }
-  
-  card += `${sideBorder}                                          ${sideBorder}\n`;
-  card += `${sideBorder} 🆔 ${truncateText(nft.address, 30)} ${sideBorder}\n`;
-  
-  if (nft.on_sale !== undefined) {
-    const saleStatus = nft.on_sale ? '💰 На продаже' : '📦 Не продается';
-    card += `${sideBorder} ${saleStatus} ${sideBorder}\n`;
-  }
-  
-  card += `${bottomBorder}`;
-  
-  return card;
-}
-
-/**
- * Получает NFT из файла данных
- */
-async function getNftsFromFile(count = 5) {
+async function getCardsFromFile(count = 5) {
   try {
     await ensureDataDir();
     
     try {
-      await fs.access(MAIN_DATA_FILE);
+      await fs.access(BOT_CARDS_FILE);
+      console.log(`📂 Файл найден: ${BOT_CARDS_FILE}`);
     } catch (err) {
-      return { success: false, error: 'Файл с данными не найден' };
+      console.log(`❌ Файл не найден: ${BOT_CARDS_FILE}`);
+      return { 
+        success: false, 
+        error: 'Файл с карточками не найден. Сначала выполните /createCards' 
+      };
     }
     
-    const fileContent = await fs.readFile(MAIN_DATA_FILE, 'utf8');
-    let allData;
+    const fileContent = await fs.readFile(BOT_CARDS_FILE, 'utf8');
+    let cards;
     try {
-      allData = JSON.parse(fileContent);
+      cards = JSON.parse(fileContent);
+      console.log(`📊 JSON успешно распарсен, карточек: ${Array.isArray(cards) ? cards.length : 'не массив'}`);
     } catch (parseError) {
-      return { success: false, error: 'Ошибка чтения JSON файла' };
+      console.error('❌ Ошибка парсинга JSON:', parseError.message);
+      return { 
+        success: false, 
+        error: 'Ошибка чтения файла карточек: ' + parseError.message 
+      };
     }
     
-    if (!Array.isArray(allData) || allData.length === 0) {
-      return { success: false, error: 'Нет данных о NFT' };
+    // Проверяем что это массив
+    if (!Array.isArray(cards)) {
+      console.error('❌ Неправильный формат файла, ожидается массив');
+      return { 
+        success: false, 
+        error: 'Неправильный формат файла карточек. Ожидается массив' 
+      };
     }
     
-    console.log(`📊 В базе данных: ${allData.length} записей`);
-    
-    // Берем последние NFT (самые свежие)
-    const recentNfts = allData.slice(-count * 2); // Берем больше чтобы учесть дубликаты
-    
-    // Убираем дубликаты по адресу
-    const uniqueNfts = [];
-    const seenAddresses = new Set();
-    
-    for (let i = recentNfts.length - 1; i >= 0; i--) {
-      const nft = recentNfts[i];
-      if (!seenAddresses.has(nft.address)) {
-        seenAddresses.add(nft.address);
-        uniqueNfts.unshift(nft); // Сохраняем порядок
-      }
+    if (cards.length === 0) {
+      return { success: false, error: 'Нет созданных карточек NFT' };
     }
     
-    console.log(`🎯 Уникальных NFT найдено: ${uniqueNfts.length}`);
+    console.log(`✅ Всего карточек в файле: ${cards.length}`);
     
-    // Берем нужное количество уникальных NFT
-    const selectedNfts = uniqueNfts.slice(0, count);
+    // Проверяем структуру карточек - ТЕПЕРЬ ТОЛЬКО id и card_text
+    const validCards = cards.filter(card => {
+      return card && card.id && card.card_text;
+    });
+    
+    if (validCards.length === 0) {
+      console.log('❌ Нет валидных карточек с полями id и card_text');
+      console.log('Первая карточка для отладки:', cards[0]);
+      return { 
+        success: false, 
+        error: 'Карточки не содержат текста для отправки' 
+      };
+    }
+    
+    console.log(`✅ Корректных карточек: ${validCards.length}`);
+    
+    // Берем указанное количество карточек
+    const selectedCards = validCards.slice(0, count);
     
     return {
       success: true,
-      nfts: selectedNfts,
-      totalInDb: allData.length,
-      uniqueCount: uniqueNfts.length
+      cards: selectedCards,
+      totalCards: validCards.length
     };
     
   } catch (error) {
-    console.error('❌ Ошибка чтения файла данных:', error.message);
-    return { success: false, error: 'Ошибка чтения данных: ' + error.message };
+    console.error('❌ Ошибка чтения файла карточек:', error.message);
+    return { 
+      success: false, 
+      error: 'Ошибка чтения карточек: ' + error.message 
+    };
+  }
+}
+
+/**
+ * Отправляет карточку в Telegram
+ */
+async function sendCardToBot(bot, chatId, card) {
+  try {
+    console.log(`📤 Отправляю карточку: ${card.id}`);
+    
+    // Отправляем карточку (одним сообщением с HTML разметкой)
+    await bot.sendMessage(chatId, card.card_text, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: false // Разрешаем превью ссылок
+    });
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Ошибка отправки карточки:', error.message);
+    
+    // Пробуем отправить без HTML (если есть ошибка парсинга)
+    if (error.message.includes('parse entities') || error.message.includes('HTML')) {
+      console.log('🔄 Пробую отправить как обычный текст...');
+      try {
+        // Убираем HTML теги для простого текста
+        const plainText = card.card_text
+          .replace(/<b>(.*?)<\/b>/g, '*$1*')
+          .replace(/<a href=".*?">(.*?)<\/a>/g, '$1')
+          .replace(/<[^>]*>/g, '');
+        
+        await bot.sendMessage(chatId, plainText, {
+          parse_mode: 'Markdown'
+        });
+        return true;
+      } catch (fallbackError) {
+        console.error('❌ Ошибка при отправке простого текста:', fallbackError.message);
+      }
+    }
+    
+    return false;
   }
 }
 
@@ -188,84 +148,143 @@ async function handleShowCards(bot, msg) {
   try {
     console.log(`🃏 Пользователь ${username} запросил ${cardsCount} карточек NFT`);
     
-    await bot.sendMessage(
+    // Проверяем наличие файла карточек
+    const statusMessage = await bot.sendMessage(
       chatId,
-      `🃏 Готовлю ${cardsCount} карточек NFT...\n\nИщу последние NFT в базе данных...`
+      `🃏 Ищу готовые карточки NFT...\nЗапрошено: ${cardsCount} карточек`
     );
     
-    // Получаем NFT из файла
-    const nftsResult = await getNftsFromFile(cardsCount * 2);
+    // Получаем карточки из файла
+    const cardsResult = await getCardsFromFile(cardsCount);
     
-    if (!nftsResult.success) {
-      return bot.sendMessage(
-        chatId,
-        `❌ Ошибка:\n${nftsResult.error}\n\nИспользуйте /get_nfts_info для сбора данных.`
+    if (!cardsResult.success) {
+      await bot.editMessageText(
+        `❌ ${cardsResult.error}\n\nСначала создайте карточки командой /createCards`,
+        {
+          chat_id: chatId,
+          message_id: statusMessage.message_id,
+          parse_mode: 'HTML'
+        }
       );
+      return;
     }
     
-    const nfts = nftsResult.nfts.slice(0, cardsCount);
+    const cards = cardsResult.cards;
     
-    console.log(`✅ Найдено NFT для отображения: ${nfts.length}`);
+    console.log(`✅ Найдено карточек для отображения: ${cards.length}`);
     
-    if (nfts.length === 0) {
-      return bot.sendMessage(
-        chatId,
-        `📭 Не найдено NFT для отображения\n\nБаза данных содержит ${nftsResult.totalInDb} записей,\nно после фильтрации дубликатов ничего не осталось.\n\nИспользуйте /get_nfts_info для сбора новых данных.`
-      );
-    }
-    
-    // Отправляем сообщение о начале отображения
-    await bot.sendMessage(
-      chatId,
-      `✅ Найдено ${nfts.length} NFT\n\nСоздаю красивые карточки...\nБаза данных: ${nftsResult.totalInDb} записей\nУникальных NFT: ${nftsResult.uniqueCount}`
-    );
-    
-    // Отправляем карточки группами
-    for (let i = 0; i < nfts.length; i += CARDS_PER_MESSAGE) {
-      const batch = nfts.slice(i, i + CARDS_PER_MESSAGE);
-      const batchNumber = Math.floor(i / CARDS_PER_MESSAGE) + 1;
-      const totalBatches = Math.ceil(nfts.length / CARDS_PER_MESSAGE);
-      
-      // Создаем сообщение с несколькими карточками
-      let message = '';
-      
-      if (totalBatches > 1) {
-        message += `📋 Пакет ${batchNumber} из ${totalBatches}\n\n`;
+    // Обновляем статус
+    await bot.editMessageText(
+      `✅ Найдено ${cards.length} карточек\nНачинаю отправку...`,
+      {
+        chat_id: chatId,
+        message_id: statusMessage.message_id,
+        parse_mode: 'HTML'
       }
+    );
+    
+    // Отправляем карточки по одной
+    let successCount = 0;
+    let errorCount = 0;
+    
+    for (let i = 0; i < cards.length; i++) {
+      const card = cards[i];
+      const cardNumber = i + 1;
       
-      batch.forEach((nft, indexInBatch) => {
-        const card = createNftCard(nft, i + indexInBatch, nfts.length);
-        message += card + '\n\n';
-      });
-      
-      // Отправляем сообщение с карточками (без Markdown разметки)
-      await bot.sendMessage(chatId, message, {
-        parse_mode: undefined, // Отключаем Markdown
-        disable_web_page_preview: true
-      });
-      
-      // Пауза между сообщениями чтобы не спамить
-      if (batchNumber < totalBatches) {
+      try {
+        console.log(`📤 Отправляю карточку ${cardNumber}/${cards.length}: ${card.id}`);
+        
+        // Показываем индикатор набора текста
+        await bot.sendChatAction(chatId, 'typing');
+        
+        // Пауза перед отправкой
         await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Отправляем карточку
+        const sent = await sendCardToBot(bot, chatId, card);
+        
+        if (sent) {
+          successCount++;
+          console.log(`✅ Карточка ${cardNumber} отправлена успешно`);
+        } else {
+          errorCount++;
+          console.log(`❌ Карточка ${cardNumber} не отправлена`);
+        }
+        
+        // Пауза между карточками
+        if (i < cards.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+      } catch (error) {
+        console.error(`❌ Ошибка отправки карточки ${cardNumber}:`, error.message);
+        errorCount++;
       }
     }
     
     // Отправляем итоговое сообщение
-    const summaryMessage = `🎉 ${nfts.length} карточек NFT успешно показано!\n\nСтатистика базы данных:\n📊 Всего записей: ${nftsResult.totalInDb}\n🎯 Уникальных NFT: ${nftsResult.uniqueCount}\n\nДругие команды:\n/get_nfts_info - собрать новые данные\n/export_info - скачать базу данных\n/stats - подробная статистика`;
+    const summaryMessage = `🎉 Отправка карточек завершена!\n\n` +
+      `📊 Статистика:\n` +
+      `✅ Успешно: ${successCount} карточек\n` +
+      `❌ Ошибок: ${errorCount} карточек\n\n` +
+      `Всего доступно: ${cardsResult.totalCards} карточек\n\n` +
+      `Команды:\n` +
+      `/createCards - обновить карточки\n` +
+      `/get_nfts_info - собрать новые данные\n` +
+      `/show_cards N - показать N карточек`;
     
     await bot.sendMessage(chatId, summaryMessage);
     
-    console.log(`✅ Показано ${nfts.length} карточек для ${username}`);
+    console.log(`✅ Отправлено ${successCount} карточек для ${username}`);
     
   } catch (error) {
     console.error('❌ Ошибка в команде /show_cards:', error.message);
-    console.error(error.stack);
     
     await bot.sendMessage(
       chatId,
-      `❌ Ошибка при создании карточек:\n${error.message}\n\nПопробуйте еще раз или используйте /get_nfts_info для обновления данных.`
+      `❌ Критическая ошибка:\n${error.message.substring(0, 200)}\n\nПопробуйте сначала создать карточки командой /createCards`
     );
   }
 }
 
-module.exports = { handleShowCards };
+/**
+ * Функция для отправки конкретной карточки по ID
+ */
+async function sendCardById(bot, chatId, cardId) {
+  try {
+    const cardsResult = await getCardsFromFile(100);
+    
+    if (!cardsResult.success) {
+      return { success: false, error: cardsResult.error };
+    }
+    
+    // Ищем карточку по ID
+    const card = cardsResult.cards.find(c => c.id === cardId);
+    
+    if (!card) {
+      return { 
+        success: false, 
+        error: `Карточка с ID "${cardId}" не найдена` 
+      };
+    }
+    
+    const sent = await sendCardToBot(bot, chatId, card);
+    
+    return {
+      success: sent,
+      card: card
+    };
+    
+  } catch (error) {
+    console.error('❌ Ошибка отправки карточки по ID:', error.message);
+    return { 
+      success: false, 
+      error: error.message 
+    };
+  }
+}
+
+module.exports = { 
+  handleShowCards,
+  sendCardById
+};
