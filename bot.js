@@ -1,6 +1,5 @@
 const { API_TOKEN } = require('./modules/utils.js');
 const TelegramBot = require('node-telegram-bot-api');
-
 // Импорт модулей команд
 const { handleNewMartian } = require('./modules/fetchMartians.js');
 const { handleGetNftsInfo } = require('./modules/getNftInfo.js');
@@ -8,11 +7,13 @@ const { handleExportInfo } = require('./modules/exportInfo.js');
 const { handleShowStats } = require('./modules/showStats.js');
 const { handleClearInfo, handleClearCallback } = require('./modules/clearInfo.js');
 const { handleShowCards } = require('./modules/showCards.js');
+const { initAntiLinks } = require('./modules/antiLinks.js');
+const { initGreeting } = require('./modules/greeting.js');
 const { COLLECTION_ADDRESS_UF } = require('./modules/utils.js');
 
 // ДОБАВЛЕНИЕ watchOrcs.js:
 const { 
-  handleWatchOrcs, 
+	handleWatchOrcs, 
   handleStopWatch, 
   handleWatcherStatus,
   handleWatcherCallback 
@@ -21,7 +22,8 @@ const {
 
 // ====== BOT INIT ======
 const bot = new TelegramBot(API_TOKEN, { polling: true });
-
+initAntiLinks(bot)
+initGreeting(bot)
 // ====== РЕГИСТРАЦИЯ КОМАНД ======
 
 // Команда /new_martian
@@ -257,6 +259,7 @@ async function startBot() {
   console.log('   /start - приветственное сообщение');
   console.log('📁 Данные сохраняются в папку: nft_data/');
 }
+
 
 // Запускаем бота
 startBot();
