@@ -17,10 +17,10 @@ const path = require('path');
 const COLLECTION_ADDRESS = '0:463685d77d0474ec774386d92622ed688d34f07230741211d838c487dcfeec64';
 const LIMIT = 1;       // проверяем по 1 NFT
 const MAX_SEND = 1;    // сколько NFT отправляем за раз
-const CHECK_INTERVAL = 60_000; // проверка раз в минуту
+const CHECK_INTERVAL = 5000; // проверка раз в минуту
 const STATE_FILE = path.join(DATA_DIR, 'watch_orcs_state.json');
 
-let OFFSET = 26690; // стартовый offset
+let OFFSET = 26700; // стартовый offset
 let watcherStarted = false;
 let intervalId = null;
 
