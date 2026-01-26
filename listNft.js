@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const { Address } = require('ton');
 require('dotenv').config();
+const POWER_DB = require('./power.json');
 
 const bot = new TelegramBot(process.env.API_TOKEN, { polling: true });
 
@@ -113,20 +114,25 @@ async function sendNft(nft) {
 
   if (!image) return;
 
-  let attributes = '';
-  if (Array.isArray(nft.metadata?.attributes)) {
-    attributes = nft.metadata.attributes
-      .map(a => `• <b>${a.trait_type}:</b> ${a.value}`)
-      .reverse()
-      .join('\n');
+	let attributesText = '';
+  let totalPower = 0;
+
+	if (Array.isArray(nft.metadata?.attributes)) {
+    nft.metadata.attributes.forEach(a => {
+      const attrPowerObj = POWER_DB.attributes[a.trait_type]?.find(attr => attr.name === a.value);
+      const power = attrPowerObj ? attrPowerObj.power : 0;
+      totalPower += power;
+      attributesText += `• <b>${a.trait_type}:</b> ${a.value} - ⚡${power}\n`;
+    });
   }
 
   const caption = `
 🖼 <b>${name}</b>
 💰 Цена: ${price ? price + ' TON' : 'в pending'}
+<b>💪 Общая сила: ⚡${totalPower}</b>
 
 ${saleLink ? `🛒 <a href="${saleLink}">Купить на Getgems</a>\n` : ''}
-${attributes}
+${attributesText.trim()}
 `.trim();
 
   await bot.sendPhoto(chatId, image, {
@@ -198,8 +204,8 @@ bot.onText(/\/start_nft/, (msg) => {
   chatId = msg.chat.id;
 
   if (!nftInterval) {
-    nftInterval = setInterval(checkNft, 3000);
-    pendingInterval = setInterval(processPending, 10000);
+    nftInterval = setInterval(checkNft, 1000);
+    pendingInterval = setInterval(processPending, 2000);
     bot.sendMessage(chatId, '🚀 NFT отслеживание запущено');
   } else {
     bot.sendMessage(chatId, '⚠️ Уже запущено');
