@@ -1,10 +1,5 @@
 // modules/antiLinks.js
 
-/**
- * Модуль антиссылки для Telegram
- * Работает как в частной группе (только предупреждение), так и в супергруппе (удаление + предупреждение)
- */
-
 function initAntiLinks(bot) {
   // Проверка текста на ссылку
   function containsLink(text) {

@@ -1,189 +1,318 @@
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
+const { Address } = require('ton');
 require('dotenv').config();
+const POWER_DB = require('./power.json');
+const { initAntiLinks } = require('./modules/antiLinks.js');
+const { initGreeting } = require('./modules/greeting.js');
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+
+const bot = new TelegramBot(process.env.API_TOKEN, { polling: true });
+
+initAntiLinks(bot)
+initGreeting(bot)
 
 const ACCOUNT_ID = '0:39d63083e48f46452ff8a04cd0d3733a90c8be299aa5951b62741759b2c17e0e';
 const TARGET_COLLECTION = 'Unstoppable Tribe from ZarGates';
 
 let chatId = null;
-let lastNftAddress = null;
-let pendingQueue = {};
+let trackedSkin = null; // Skin Tone для фильтра
+
+const pendingQueue = {};
+const sentNfts = new Map();
+const ignoredNfts = new Set();
+const sendQueue = [];
+let sending = false;
+
 let nftInterval = null;
 let pendingInterval = null;
-let trackedSkin = null; // значение Skin Tone, которое нужно отслеживать
 
-// -------------------- Универсальный GET с retry при 429 --------------------
+const MAX_PENDING_TIME = 5 * 60 * 1000; // 5 минут
+const SENT_TTL = 10 * 60 * 1000;       // 10 минут
+let last429Log = 0;
+
+// -------------------- chatId --------------------
+bot.on('message', (msg) => {
+  chatId = msg.chat.id;
+});
+
+// -------------------- safe GET с backoff --------------------
 async function safeGet(url, params = {}) {
   let tries = 0;
+  let wait = 2000;
   while (tries < 5) {
     try {
       const { data } = await axios.get(url, { params });
       return data;
     } catch (e) {
       if (e.response?.status === 429) {
-        const waitTime = (tries + 1) * 2000;
-        console.warn(`429 Too Many Requests, ждем ${waitTime}ms...`);
-        await new Promise(r => setTimeout(r, waitTime));
+        const now = Date.now();
+        if (now - last429Log > 5000) {
+          console.warn(`⏳ 429 rate limit, повтор через ${wait}мс`);
+          last429Log = now;
+        }
+        await new Promise(r => setTimeout(r, wait));
         tries++;
+        wait *= 2;
       } else {
-        throw e;
+        console.error('❌ HTTP ошибка:', e.message);
+        return null;
       }
     }
   }
-  throw new Error('Превышено количество попыток из-за 429');
+  return null;
 }
 
-// -------------------- Получаем последний NFT --------------------
-async function getLastNftAddress() {
+// -------------------- TON address → friendly --------------------
+function toFriendlyAddress(rawAddress) {
   try {
-    const data = await safeGet(
-      `https://tonapi.io/v2/accounts/${ACCOUNT_ID}/nfts/history`,
-      { limit: 1 }
-    );
-    return data.operations?.[0]?.item?.address;
-  } catch (e) {
-    console.error('Ошибка getLastNftAddress:', e.message);
+    return Address.parse(rawAddress).toString({ urlSafe: true });
+  } catch {
     return null;
   }
 }
 
-// -------------------- Получаем данные NFT --------------------
+// -------------------- Getgems link --------------------
+function getSaleLink(nft) {
+  if (!nft?.address) return null;
+  const friendly = toFriendlyAddress(nft.address);
+  return friendly ? `https://getgems.io/nft/${friendly}` : null;
+}
+
+// -------------------- last NFT addresses --------------------
+async function getLastNftAddresses(limit = 10) {
+  const data = await safeGet(`https://tonapi.io/v2/accounts/${ACCOUNT_ID}/nfts/history`, { limit });
+  if (!data) return [];
+  return (data.operations ?? []).map(op => op.item?.address).filter(Boolean);
+}
+
+// -------------------- NFT data --------------------
 async function getNftData(nftId) {
-  try {
-    const data = await safeGet(`https://tonapi.io/v2/nfts/${nftId}`);
-    return data;
-  } catch (e) {
-    console.error('Ошибка getNftData:', e.message);
-    return null;
-  }
+  return await safeGet(`https://tonapi.io/v2/nfts/${nftId}`);
 }
 
-// -------------------- Берём самое большое изображение --------------------
+// -------------------- best image --------------------
 function getBestImage(nft) {
-  if (!Array.isArray(nft.previews) || nft.previews.length === 0) return null;
-
-  const sorted = nft.previews
-    .filter(p => p.url && p.url.startsWith('https://'))
-    .sort((a, b) => Number(b.resolution.split('x')[0]) - Number(a.resolution.split('x')[0]));
-
-  return sorted[0]?.url || null;
+  if (!Array.isArray(nft.previews)) return null;
+  return nft.previews
+    .filter(p => p.url?.startsWith('https://'))
+    .sort((a, b) => Number(b.resolution.split('x')[0]) - Number(a.resolution.split('x')[0]))[0]?.url || null;
 }
 
-// -------------------- Проверка атрибута Skin Tone --------------------
+// -------------------- бонус за числа --------------------
+function getNumberPowerBonus(nft, powerDb) {
+  let bonus = 0;
+  const textToScan = [
+    nft.metadata?.name || '',
+    ...(Array.isArray(nft.metadata?.attributes) ? nft.metadata.attributes.map(a => a.value) : [])
+  ].join(' ');
+
+  for (const np of powerDb.number_power) {
+    const regex = new RegExp(`\\b${np.sticker_number}\\b`, 'g');
+    if (regex.test(textToScan)) {
+      bonus += np.power;
+    }
+  }
+
+  return bonus;
+}
+
+// -------------------- проверка Skin Tone --------------------
 function checkSkinTone(nft) {
+  if (!trackedSkin) return true; // фильтр выключен
   if (!Array.isArray(nft.metadata?.attributes)) return false;
-
   const skinAttr = nft.metadata.attributes.find(a => a.trait_type === 'Skin Tone');
-  if (!skinAttr) return false;
-
-  return skinAttr.value.toLowerCase() === trackedSkin?.toLowerCase();
+  return skinAttr?.value?.toLowerCase() === trackedSkin.toLowerCase();
 }
 
-// -------------------- Отправка NFT в Telegram --------------------
+// -------------------- отправка NFT --------------------
 async function sendNft(nft) {
   if (!chatId || !nft) return;
 
-  const name = nft.metadata?.name || 'Без названия';
+  let name = nft.metadata?.name || 'Без названия';
   const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
   const image = getBestImage(nft);
-  if (!image) {
-    console.log('Нет валидного изображения для NFT:', name);
-    return;
-  }
+  const saleLink = getSaleLink(nft);
+  if (!image) return;
 
   let attributesText = '';
+  let totalPower = 0;
+  const attrNamesForSynergy = [];
+  const attrMap = {};
+
   if (Array.isArray(nft.metadata?.attributes)) {
-    attributesText = nft.metadata.attributes
-      .map(attr => `• <b>${attr.trait_type}:</b> ${attr.value}`)
-      .reverse()
-      .join('\n');
+    nft.metadata.attributes.forEach(a => {
+      let type = a.trait_type;
+      if (type.toLowerCase().includes('earring') && POWER_DB.attributes['Earrings']) type = 'Earrings';
+      if (type.toLowerCase().includes('cap') && POWER_DB.attributes['Cap']) type = 'Cap';
+
+      const attrPowerObj = POWER_DB.attributes[type]?.find(attr => attr.name === a.value);
+      const power = attrPowerObj ? attrPowerObj.power : 0;
+      totalPower += power;
+      attrMap[a.value] = type;
+
+      if (type !== 'Skin Tone') attrNamesForSynergy.push(a.value);
+    });
   }
 
-  await bot.sendPhoto(chatId, image, {
-    caption: `
+  // --------- расчет синергии ---------
+  const synergyAttrSet = new Set();
+  for (let i = 0; i < attrNamesForSynergy.length; i++) {
+    const words1 = attrNamesForSynergy[i].split(/\s+/);
+    for (let j = i + 1; j < attrNamesForSynergy.length; j++) {
+      const words2 = attrNamesForSynergy[j].split(/\s+/);
+      if (words1.some(w1 => words2.some(w2 =>
+        POWER_DB.synergy.some(s => w1.toLowerCase().startsWith(s.toLowerCase()) && w2.toLowerCase().startsWith(s.toLowerCase()))
+      ))) {
+        synergyAttrSet.add(attrNamesForSynergy[i]);
+        synergyAttrSet.add(attrNamesForSynergy[j]);
+      }
+    }
+  }
+
+  let synergyBonus = 0;
+  const synergyCount = synergyAttrSet.size;
+  if (synergyCount === 2) synergyBonus = 100;
+  else if (synergyCount >= 3) synergyBonus = 300;
+
+  if (Array.isArray(nft.metadata?.attributes)) {
+    nft.metadata.attributes.forEach(a => {
+      const power = POWER_DB.attributes[attrMap[a.value]]?.find(attr => attr.name === a.value)?.power || 0;
+      const isSynergy = synergyAttrSet.has(a.value);
+      attributesText += `• ${a.trait_type}: ${a.value}⚡${power} ${isSynergy ? ' (Synergy)' : ''}\n`;
+    });
+  }
+
+  if (synergyCount === 0) name += ' (без Synergy)';
+
+  const totalPowerWithSynergy = totalPower + synergyBonus;
+
+  // бонус за Number
+  const numberBonus = getNumberPowerBonus(nft, POWER_DB);
+  const totalPowerFinal = totalPowerWithSynergy + numberBonus;
+
+  let numberTextTop = '';
+  if (numberBonus === 500) numberTextTop = '💥 Крутой номер!';
+  else if (numberBonus === 1000) numberTextTop = '🔥 Невероятный номер!';
+  else if (numberBonus === 5000) numberTextTop = '🍀 Самый счастливый номер!';
+
+  let powerText = `⚡${totalPowerWithSynergy}`;
+  const bonusParts = [];
+  if (synergyBonus) bonusParts.push(`Synergy +${synergyBonus}`);
+  if (numberBonus) bonusParts.push(`Bonus за Number +${numberBonus}`);
+  if (bonusParts.length) powerText += ` (${bonusParts.join(', ')})`;
+
+
+	const myLink = '<a href="https://t.me/+uThTTf_EJ7c5NzJi">🔥 Все орки</a>';
+
+  const caption = `
+${numberTextTop ? numberTextTop + '\n' : ''}
 🖼 <b>${name}</b>
 💰 Цена: ${price ? price + ' TON' : 'в pending'}
+<b>💪 Общая сила: ${powerText}</b>
 
-${attributesText}
-`.trim(),
+${saleLink ? `🛒 <a href="${saleLink}">Купить на Getgems</a>\n` : ''}
+${attributesText.trim()}\n
+-------\n
+${myLink}
+`.trim();
+
+  await bot.sendPhoto(chatId, image, {
+    caption,
     parse_mode: 'HTML',
+    disable_web_page_preview: true,
   });
+
+  console.log(`✅ NFT ПОКАЗАНА | ${name} | ${price ? price + ' TON' : 'pending'} | Power: ${totalPowerFinal}`);
 }
 
-// -------------------- Основной цикл проверки новых NFT --------------------
+// -------------------- очередь отправки --------------------
+async function processSendQueue() {
+  if (sending || sendQueue.length === 0) return;
+  sending = true;
+
+  while (sendQueue.length > 0) {
+    const nft = sendQueue.shift();
+    await sendNft(nft);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  sending = false;
+}
+
+// -------------------- проверка новых NFT --------------------
 async function checkNft() {
-  try {
-    const nftAddress = await getLastNftAddress();
-    if (!nftAddress) return;
-    if (nftAddress === lastNftAddress) return;
-    lastNftAddress = nftAddress;
+  const nftAddresses = await getLastNftAddresses(1);
 
-    const nftData = await getNftData(nftAddress);
-    if (!nftData) return;
+  for (const addrRaw of nftAddresses) {
+    const normalizedAddress = addrRaw.trim().toLowerCase();
+    if (ignoredNfts.has(normalizedAddress)) continue;
 
-    if (nftData.collection?.name !== TARGET_COLLECTION) {
-      console.log('NFT не из нужной коллекции, пропускаем:', nftData.metadata?.name);
-      return;
+    const nft = await getNftData(addrRaw);
+    if (!nft) continue;
+
+    const collectionName = nft.collection?.name?.trim();
+    if (collectionName !== TARGET_COLLECTION) {
+      ignoredNfts.add(normalizedAddress);
+      console.log(`❌ NFT ПРОПУЩЕНА | ${nft.metadata?.name || 'Без названия'} | другая коллекция`);
+      continue;
     }
 
-    if (!checkSkinTone(nftData)) {
-      console.log('NFT не совпадает с нужным Skin Tone, пропускаем:', nftData.metadata?.name);
-      return;
+    if (!checkSkinTone(nft)) {
+      console.log(`❌ NFT ПРОПУЩЕНА | ${nft.metadata?.name || 'Без названия'} | Skin Tone не совпадает`);
+      continue;
     }
 
-    const price = nftData.sale ? Number(nftData.sale.price.value) / 1e9 : null;
+    const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
+    const nftKey = `${normalizedAddress}_${price ?? 'pending'}`;
+
+    if (sentNfts.has(nftKey) && Date.now() - sentNfts.get(nftKey) < SENT_TTL) continue;
+
     if (!price) {
-      console.log('NFT pending, добавляем в очередь:', nftAddress);
-      pendingQueue[nftAddress] = Date.now();
-    } else {
-      await sendNft(nftData);
+      pendingQueue[addrRaw] = Date.now();
+      continue;
     }
 
-  } catch (e) {
-    console.error('Ошибка checkNft:', e.message);
+    sendQueue.push(nft);
+    sentNfts.set(nftKey, Date.now());
+    delete pendingQueue[addrRaw];
   }
 }
 
-// -------------------- Цикл обработки pending NFT --------------------
+// -------------------- process pending --------------------
 async function processPending() {
-  try {
-    const now = Date.now();
-    for (const nftAddress of Object.keys(pendingQueue)) {
-      if (now - pendingQueue[nftAddress] < 10000) continue;
+  const now = Date.now();
 
-      const nftData = await getNftData(nftAddress);
-      if (!nftData) continue;
+  for (const addrRaw of Object.keys(pendingQueue)) {
+    const normalizedAddress = addrRaw.trim().toLowerCase();
 
-      if (nftData.collection?.name !== TARGET_COLLECTION) {
-        console.log('NFT больше не в нужной коллекции, удаляем из очереди:', nftAddress);
-        delete pendingQueue[nftAddress];
-        continue;
-      }
-
-      if (!checkSkinTone(nftData)) {
-        console.log('NFT больше не совпадает с Skin Tone, удаляем из очереди:', nftAddress);
-        delete pendingQueue[nftAddress];
-        continue;
-      }
-
-      const price = nftData.sale ? Number(nftData.sale.price.value) / 1e9 : null;
-      if (price) {
-        console.log('NFT получил цену, отправляем в чат:', nftAddress);
-        await sendNft(nftData);
-        delete pendingQueue[nftAddress];
-      } else {
-        pendingQueue[nftAddress] = now;
-        console.log('NFT всё ещё pending:', nftAddress);
-      }
+    if (now - pendingQueue[addrRaw] > MAX_PENDING_TIME) {
+      delete pendingQueue[addrRaw];
+      ignoredNfts.add(normalizedAddress);
+      continue;
     }
-  } catch (e) {
-    console.error('Ошибка processPending:', e.message);
+
+    const nft = await getNftData(addrRaw);
+    if (!nft) continue;
+
+    if (!checkSkinTone(nft)) {
+      console.log(`❌ NFT из pending больше не совпадает с Skin Tone, удаляем | ${nft.metadata?.name}`);
+      delete pendingQueue[addrRaw];
+      continue;
+    }
+
+    const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
+    const nftKey = `${normalizedAddress}_${price ?? 'pending'}`;
+
+    if (price && (!sentNfts.has(nftKey) || Date.now() - sentNfts.get(nftKey) > SENT_TTL)) {
+      sendQueue.push(nft);
+      sentNfts.set(nftKey, Date.now());
+      delete pendingQueue[addrRaw];
+    }
   }
 }
 
-// -------------------- Команды для управления ботом --------------------
+// -------------------- команды --------------------
 bot.onText(/\/track_skin (.+)/, (msg, match) => {
   chatId = msg.chat.id;
   trackedSkin = match[1]?.trim();
@@ -194,8 +323,9 @@ bot.onText(/\/track_skin (.+)/, (msg, match) => {
   }
 
   if (!nftInterval) {
-    nftInterval = setInterval(checkNft, 3000);
-    pendingInterval = setInterval(processPending, 10000);
+    nftInterval = setInterval(checkNft, 1000);
+    pendingInterval = setInterval(processPending, 1000);
+    setInterval(processSendQueue, 500);
     bot.sendMessage(chatId, `🚀 Отслеживание NFT с Skin Tone: <b>${trackedSkin}</b> запущено!`, { parse_mode: 'HTML' });
   } else {
     bot.sendMessage(chatId, `⚠️ Отслеживание уже запущено. Текущее Skin Tone: <b>${trackedSkin}</b>`, { parse_mode: 'HTML' });
@@ -211,7 +341,6 @@ bot.onText(/\/stop_nft/, (msg) => {
     nftInterval = null;
     pendingInterval = null;
     pendingQueue = {};
-    lastNftAddress = null;
     trackedSkin = null;
     bot.sendMessage(chatId, '🛑 Отслеживание NFT остановлено!');
   } else {

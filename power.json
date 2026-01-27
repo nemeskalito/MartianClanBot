@@ -57,7 +57,7 @@
       { "id": 11, "name": "Rail", "rarity": "Epic", "power": 20 },
       { "id": 12, "name": "Spear", "rarity": "Epic", "power": 20 },
       { "id": 13, "name": "Crowbar", "rarity": "Epic", "power": 20 },
-      { "id": 14, "name": "Clar", "rarity": "Epic", "power": 20 },
+      { "id": 14, "name": "Oar", "rarity": "Epic", "power": 20 },
       { "id": 15, "name": "Chair", "rarity": "Common", "power": 10 },
       { "id": 16, "name": "Branch", "rarity": "Common", "power": 10 },
       { "id": 17, "name": "Mop", "rarity": "Common", "power": 10 },
@@ -84,7 +84,7 @@
       { "id": 18, "name": "Toadstools", "rarity": "Common", "power": 10 }
     ],
     "Armor": [
-      { "id": 1, "name": "Breatheplate Of The Dead", "rarity": "Legendary", "power": 50 },
+      { "id": 1, "name": "Breastplate Of The Dead", "rarity": "Legendary", "power": 50 },
       { "id": 2, "name": "Dragon", "rarity": "Legendary", "power": 50 },
       { "id": 3, "name": "Ruby", "rarity": "Legendary", "power": 50 },
       { "id": 4, "name": "Cyber", "rarity": "Epic", "power": 20 },
@@ -140,7 +140,7 @@
       { "id": 14, "name": "Elephant", "rarity": "Common", "power": 10 },
       { "id": 15, "name": "Wooden", "rarity": "Common", "power": 10 },
       { "id": 16, "name": "Fake Gold", "rarity": "Common", "power": 10 },
-      { "id": 17, "name": "Mechanic's Gear", "rarity": "Common", "power": 10 },
+      { "id": 17, "name": "Mechanic’s Gear", "rarity": "Common", "power": 10 },
       { "id": 18, "name": "Stone", "rarity": "Common", "power": 10 }
     ],
     "Cap": [
@@ -151,7 +151,7 @@
       { "id": 5, "name": "Cosmic Black", "rarity": "Legendary", "power": 50 },
       { "id": 6, "name": "Demonic Red", "rarity": "Legendary", "power": 50 },
       { "id": 7, "name": "Gold", "rarity": "Legendary", "power": 50 },
-      { "id": 8, "name": "MACA", "rarity": "Legendary", "power": 50 },
+      { "id": 8, "name": "MAGA", "rarity": "Legendary", "power": 50 },
       { "id": 9, "name": "ETH", "rarity": "Epic", "power": 20 },
       { "id": 10, "name": "RUB", "rarity": "Epic", "power": 20 },
       { "id": 11, "name": "Dollar", "rarity": "Epic", "power": 20 },
@@ -284,8 +284,7 @@
       { "id": 18, "name": "Ripped-Off Fence", "rarity": "Common", "power": 10 }
     ]
   },
-  "beautiful_rare_sticker_numbers": {
-    "single_digits": [
+  "number_power": [
       { "sticker_number": 0, "power": 1000 },
       { "sticker_number": 1, "power": 1000 },
       { "sticker_number": 2, "power": 1000 },
@@ -304,9 +303,7 @@
       { "sticker_number": 66, "power": 500 },
       { "sticker_number": 77, "power": 500 },
       { "sticker_number": 88, "power": 500 },
-      { "sticker_number": 99, "power": 500 }
-    ],
-    "three_digits_repeating": [
+      { "sticker_number": 99, "power": 500 },
       { "sticker_number": 111, "power": 500 },
       { "sticker_number": 222, "power": 500 },
       { "sticker_number": 333, "power": 500 },
@@ -315,9 +312,7 @@
       { "sticker_number": 666, "power": 500 },
       { "sticker_number": 777, "power": 500 },
       { "sticker_number": 888, "power": 500 },
-      { "sticker_number": 999, "power": 500 }
-    ],
-    "four_digits_repeating": [
+      { "sticker_number": 999, "power": 500 },
       { "sticker_number": 1111, "power": 500 },
       { "sticker_number": 2222, "power": 500 },
       { "sticker_number": 3333, "power": 500 },
@@ -326,10 +321,49 @@
       { "sticker_number": 6666, "power": 500 },
       { "sticker_number": 7777, "power": 500 },
       { "sticker_number": 8888, "power": 500 },
-      { "sticker_number": 9999, "power": 500 }
-    ],
-    "five_digits_repeating": [
+      { "sticker_number": 9999, "power": 500 },
       { "sticker_number": 11111, "power": 5000 }
-    ]
-  }
+   ],
+	 "synergy": [
+     "Silver",
+     "Spiked",
+     "Magic",
+     "Mushroom",
+     "Bitcoin",
+     "Gold",
+     "Paper",
+     "Mechanic",
+     "Runed",
+     "Ton",
+     "Elephant",
+     "RUB",
+     "Zargates",
+     "Dollar",
+     "Tribo",
+     "Cyber",
+     "Lunar",
+     "Demonic",
+     "Cavern",
+     "Martian",
+     "Desert",
+     "Fairytale",
+     "Cosmic",
+     "Swamp",
+     "Meadow",
+     "Mountain",
+     "Urban",
+     "Beach",
+     "Forest",
+     "Taiga",
+     "Tropical",
+     "Wooden",
+     "Bone",
+     "Ruby",
+     "Emerald",
+     "Phoenix",
+     "Dragon",
+     "Leather",
+     "Copper",
+     "Chocolate"
+  ]
 }

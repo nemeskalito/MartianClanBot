@@ -1,9 +1,4 @@
 // modules/greeting.js
-/**
- * Инициализация приветствия новых участников
- * @param {TelegramBot} bot - экземпляр Telegram бота
- * @param {string} [gifPath] - путь к GIF или видео для приветствия
- */
 function initGreeting(bot, gifPath = './public/image/greeting.mp4') {
   bot.on('new_chat_members', async (msg) => {
     const chatId = msg.chat.id;
