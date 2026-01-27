@@ -4,19 +4,22 @@ const { Address } = require('ton');
 require('dotenv').config();
 const POWER_DB = require('./power.json');
 
-const bot = new TelegramBot(process.env.API_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.API_TOKEN2, { polling: true });
 
 const ACCOUNT_ID = '0:39d63083e48f46452ff8a04cd0d3733a90c8be299aa5951b62741759b2c17e0e';
 const TARGET_COLLECTION = 'Unstoppable Tribe from ZarGates';
 
 let chatId = null;
-let lastNftAddress = null;
 
 const pendingQueue = {};
-const sentNfts = new Set();
+const sentNfts = new Map(); // адрес + цена → timestamp
+const ignoredNfts = new Set();
 
 let nftInterval = null;
 let pendingInterval = null;
+
+const MAX_PENDING_TIME = 5 * 60 * 1000; // 5 минут
+const SENT_TTL = 5 * 60 * 1000; // повторное показание NFT через 5 минут
 
 // -------------------- chatId --------------------
 bot.on('message', (msg) => {
@@ -33,23 +36,23 @@ async function safeGet(url, params = {}) {
     } catch (e) {
       if (e.response?.status === 429) {
         const wait = (tries + 1) * 2000;
+        console.warn(`⏳ 429 rate limit, повтор через ${wait}мс`);
         await new Promise(r => setTimeout(r, wait));
         tries++;
       } else {
-        throw e;
+        console.error('❌ HTTP ошибка:', e.message);
+        return null;
       }
     }
   }
-  throw new Error('Too many 429 retries');
+  return null;
 }
 
 // -------------------- TON address → friendly --------------------
 function toFriendlyAddress(rawAddress) {
   try {
-    const address = Address.parse(rawAddress);
-    return address.toString({ urlSafe: true }); // EQ..., UQ...
-  } catch (e) {
-    console.error('Ошибка конвертации адреса:', rawAddress);
+    return Address.parse(rawAddress).toString({ urlSafe: true });
+  } catch {
     return null;
   }
 }
@@ -57,33 +60,27 @@ function toFriendlyAddress(rawAddress) {
 // -------------------- Getgems link --------------------
 function getSaleLink(nft) {
   if (!nft?.address) return null;
-
   const friendly = toFriendlyAddress(nft.address);
-  if (!friendly) return null;
-
-  return `https://getgems.io/nft/${friendly}`;
+  return friendly ? `https://getgems.io/nft/${friendly}` : null;
 }
 
-// -------------------- last NFT --------------------
-async function getLastNftAddress() {
-  try {
-    const data = await safeGet(
-      `https://tonapi.io/v2/accounts/${ACCOUNT_ID}/nfts/history`,
-      { limit: 1 }
-    );
-    return data.operations?.[0]?.item?.address || null;
-  } catch {
-    return null;
-  }
+// -------------------- get last NFT addresses --------------------
+async function getLastNftAddresses(limit = 10) {
+  const data = await safeGet(
+    `https://tonapi.io/v2/accounts/${ACCOUNT_ID}/nfts/history`,
+    { limit }
+  );
+
+  if (!data) return [];
+
+  return (data.operations ?? [])
+    .map(op => op.item?.address)
+    .filter(Boolean);
 }
 
 // -------------------- NFT data --------------------
 async function getNftData(nftId) {
-  try {
-    return await safeGet(`https://tonapi.io/v2/nfts/${nftId}`);
-  } catch {
-    return null;
-  }
+  return await safeGet(`https://tonapi.io/v2/nfts/${nftId}`);
 }
 
 // -------------------- best image --------------------
@@ -103,26 +100,27 @@ function getBestImage(nft) {
 async function sendNft(nft) {
   if (!chatId || !nft) return;
 
-  const address = nft.address;
-  if (sentNfts.has(address)) return;
-  sentNfts.add(address);
-
   const name = nft.metadata?.name || 'Без названия';
   const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
   const image = getBestImage(nft);
   const saleLink = getSaleLink(nft);
 
-  if (!image) return;
+  if (!image) {
+    console.warn(`⚠️ NFT без изображения пропущена: ${nft.address}`);
+    ignoredNfts.add(nft.address);
+    return;
+  }
 
-	let attributesText = '';
+  let attributesText = '';
   let totalPower = 0;
 
-	if (Array.isArray(nft.metadata?.attributes)) {
+  if (Array.isArray(nft.metadata?.attributes)) {
     nft.metadata.attributes.forEach(a => {
-      const attrPowerObj = POWER_DB.attributes[a.trait_type]?.find(attr => attr.name === a.value);
+      const attrPowerObj =
+        POWER_DB.attributes[a.trait_type]?.find(attr => attr.name === a.value);
       const power = attrPowerObj ? attrPowerObj.power : 0;
       totalPower += power;
-      attributesText += `• <b>${a.trait_type}:</b> ${a.value} - ⚡${power}\n`;
+      attributesText += `• ${a.trait_type}: ${a.value} ⚡${power}\n`;
     });
   }
 
@@ -144,58 +142,79 @@ ${attributesText.trim()}
 
 // -------------------- check new NFT --------------------
 async function checkNft() {
-  try {
-    const nftAddress = await getLastNftAddress();
-    if (!nftAddress) return;
-    if (sentNfts.has(nftAddress)) return;
-    if (nftAddress === lastNftAddress) return;
+  const nftAddresses = await getLastNftAddresses(10);
 
-    lastNftAddress = nftAddress;
+  const stats = { shown: 0, pending: 0, skipped: 0 };
 
-    const nft = await getNftData(nftAddress);
-    if (!nft) return;
+  for (const address of nftAddresses) {
+    const nft = await getNftData(address);
+    if (!nft) continue;
 
-    if (nft.collection?.name !== TARGET_COLLECTION) return;
+    const name = nft.metadata?.name || 'Без названия';
+    const collectionName = nft.collection?.name?.trim();
+
+    if (collectionName !== TARGET_COLLECTION) {
+      ignoredNfts.add(address);
+      stats.skipped++;
+      continue;
+    }
 
     const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
+    const nftKey = `${address}_${price ?? 'pending'}`;
+
+    // Проверяем TTL
+    if (sentNfts.has(nftKey) && Date.now() - sentNfts.get(nftKey) < SENT_TTL) {
+      stats.skipped++;
+      continue;
+    }
 
     if (!price) {
-      pendingQueue[nftAddress] = Date.now();
-      return;
+      pendingQueue[address] = Date.now();
+      stats.pending++;
+      continue;
     }
 
     await sendNft(nft);
-  } catch {}
+    sentNfts.set(nftKey, Date.now());
+    stats.shown++;
+  }
+
+  if (stats.shown || stats.pending || stats.skipped) {
+    console.log(
+      `📦 NFT чек | ✅ показано: ${stats.shown} | ⏳ pending: ${stats.pending} | ❌ пропущено: ${stats.skipped}`
+    );
+  }
 }
 
 // -------------------- process pending --------------------
 async function processPending() {
   const now = Date.now();
+  let resolvedCount = 0;
 
   for (const address of Object.keys(pendingQueue)) {
-    if (sentNfts.has(address)) {
+    if (now - pendingQueue[address] > MAX_PENDING_TIME) {
       delete pendingQueue[address];
+      ignoredNfts.add(address);
       continue;
     }
-
-    if (now - pendingQueue[address] < 10000) continue;
 
     const nft = await getNftData(address);
     if (!nft) continue;
 
-    if (nft.collection?.name !== TARGET_COLLECTION) {
-      delete pendingQueue[address];
-      continue;
-    }
-
     const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
+    const nftKey = `${address}_${price ?? 'pending'}`;
 
-    if (price) {
+    // Если появилась цена и не показывали недавно
+    if (price && (!sentNfts.has(nftKey) || Date.now() - sentNfts.get(nftKey) > SENT_TTL)) {
       await sendNft(nft);
+      sentNfts.set(nftKey, Date.now());
       delete pendingQueue[address];
-    } else {
-      pendingQueue[address] = now;
+      resolvedCount++;
     }
+  }
+
+  if (resolvedCount) {
+    console.log(`💰 Pending обработано: ${resolvedCount}`);
   }
 }
 
