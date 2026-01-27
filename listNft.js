@@ -14,6 +14,9 @@ const pendingQueue = {};
 const sentNfts = new Map(); // ключ = normalizedAddress_price
 const ignoredNfts = new Set(); // ключ = normalizedAddress
 
+const sendQueue = [];
+let sending = false;
+
 let nftInterval = null;
 let pendingInterval = null;
 
@@ -100,15 +103,22 @@ async function sendNft(nft) {
 
   if (!image) return;
 
+  // --------- обработка атрибутов с учетом Cap/Earring ---------
   let attributesText = '';
   let totalPower = 0;
 
   if (Array.isArray(nft.metadata?.attributes)) {
     nft.metadata.attributes.forEach(a => {
-      const attrPowerObj = POWER_DB.attributes[a.trait_type]?.find(attr => attr.name === a.value);
+      let type = a.trait_type;
+
+      // исправление ошибки getgems: Earring/Cap
+      if (type.toLowerCase().includes('earring') && POWER_DB.attributes['Earrings']) type = 'Earrings';
+      if (type.toLowerCase().includes('cap') && POWER_DB.attributes['Cap']) type = 'Cap';
+
+      const attrPowerObj = POWER_DB.attributes[type]?.find(attr => attr.name === a.value);
       const power = attrPowerObj ? attrPowerObj.power : 0;
       totalPower += power;
-      attributesText += `• ${a.trait_type}: ${a.value} ⚡${power}\n`;
+      attributesText += `• ${type}: ${a.value} ⚡${power}\n`;
     });
   }
 
@@ -130,6 +140,20 @@ ${attributesText.trim()}
   console.log(`✅ NFT ПОКАЗАНА | ${name} | ${price ? price + ' TON' : 'pending'}`);
 }
 
+// -------------------- очередь отправки --------------------
+async function processSendQueue() {
+  if (sending || sendQueue.length === 0) return;
+  sending = true;
+
+  while (sendQueue.length > 0) {
+    const nft = sendQueue.shift();
+    await sendNft(nft);
+    await new Promise(r => setTimeout(r, 1000)); // пауза между NFT
+  }
+
+  sending = false;
+}
+
 // -------------------- check new NFT --------------------
 async function checkNft() {
   const nftAddresses = await getLastNftAddresses(5);
@@ -141,14 +165,10 @@ async function checkNft() {
     const nft = await getNftData(addrRaw);
     if (!nft) continue;
 
-    const name = nft.metadata?.name || 'Без названия';
     const collectionName = nft.collection?.name?.trim();
-
     if (collectionName !== TARGET_COLLECTION) {
-      if (!ignoredNfts.has(normalizedAddress)) {
-        console.log(`❌ NFT ПРОПУЩЕНА | ${name} | причина: другая коллекция (${collectionName || 'неизвестно'})`);
-        ignoredNfts.add(normalizedAddress);
-      }
+      ignoredNfts.add(normalizedAddress);
+      console.log(`❌ NFT ПРОПУЩЕНА | ${nft.metadata?.name || 'Без названия'} | другая коллекция`);
       continue;
     }
 
@@ -162,8 +182,10 @@ async function checkNft() {
       continue;
     }
 
-    await sendNft(nft);
+    // кладем в очередь на отправку
+    sendQueue.push(nft);
     sentNfts.set(nftKey, Date.now());
+    delete pendingQueue[addrRaw];
   }
 }
 
@@ -187,7 +209,7 @@ async function processPending() {
     const nftKey = `${normalizedAddress}_${price ?? 'pending'}`;
 
     if (price && (!sentNfts.has(nftKey) || Date.now() - sentNfts.get(nftKey) > SENT_TTL)) {
-      await sendNft(nft);
+      sendQueue.push(nft);
       sentNfts.set(nftKey, Date.now());
       delete pendingQueue[addrRaw];
     }
@@ -198,8 +220,9 @@ async function processPending() {
 bot.onText(/\/start_nft/, (msg) => {
   chatId = msg.chat.id;
   if (!nftInterval) {
-    nftInterval = setInterval(checkNft, 1000);       // каждые 2 секунды
-    pendingInterval = setInterval(processPending, 1000); // каждые 2 секунды
+    nftInterval = setInterval(checkNft, 1000);       // каждые 1 сек
+    pendingInterval = setInterval(processPending, 1000); // каждые 1 сек
+    setInterval(processSendQueue, 500);             // обработка очереди
     bot.sendMessage(chatId, '🚀 NFT отслеживание запущено');
   } else {
     bot.sendMessage(chatId, '⚠️ Уже запущено');

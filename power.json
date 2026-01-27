@@ -80,7 +80,7 @@
       { "id": 14, "name": "Wooden", "rarity": "Common", "power": 10 },
       { "id": 15, "name": "Spiked Wooden", "rarity": "Common", "power": 10 },
       { "id": 16, "name": "Bones", "rarity": "Common", "power": 10 },
-      { "id": 17, "name": "Mechanic's Nuts", "rarity": "Common", "power": 10 },
+      { "id": 17, "name": "Mechanic’s Nuts", "rarity": "Common", "power": 10 },
       { "id": 18, "name": "Toadstools", "rarity": "Common", "power": 10 }
     ],
     "Armor": [
