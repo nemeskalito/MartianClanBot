@@ -6,33 +6,33 @@ const POWER_DB = require('./power.json');
 
 const bot = new TelegramBot(process.env.API_TOKEN2, { polling: true });
 
-// ---------------- Настройки ----------------
-const CHAT_ID = -1003706111240; // <- сюда вставь свой ID группы
 const ACCOUNT_ID = '0:39d63083e48f46452ff8a04cd0d3733a90c8be299aa5951b62741759b2c17e0e';
 const TARGET_COLLECTION = 'Unstoppable Tribe from ZarGates';
 
-// ---------------- state ----------------
+let chatId = null;
 const pendingQueue = {};
 const sentNfts = new Map();
 const ignoredNfts = new Set();
-const sendQueue = [];
 
+const sendQueue = [];
 let sending = false;
+
 let nftInterval = null;
 let pendingInterval = null;
-let sendInterval = null;
 
-const MAX_PENDING_TIME = 5 * 60 * 1000;
-const SENT_TTL = 10 * 60 * 1000;
-
-let lastSendTime = Date.now();
+const MAX_PENDING_TIME = 5 * 60 * 1000; // 5 минут
+const SENT_TTL = 10 * 60 * 1000; // повторно показывать NFT через 10 минут
 let last429Log = 0;
 
-// ---------------- safe GET ----------------
+// -------------------- chatId --------------------
+bot.on('message', (msg) => {
+  chatId = msg.chat.id;
+});
+
+// -------------------- safe GET с backoff --------------------
 async function safeGet(url, params = {}) {
   let tries = 0;
   let wait = 2000;
-
   while (tries < 5) {
     try {
       const { data } = await axios.get(url, { params });
@@ -45,8 +45,8 @@ async function safeGet(url, params = {}) {
           last429Log = now;
         }
         await new Promise(r => setTimeout(r, wait));
-        wait *= 2;
         tries++;
+        wait *= 2;
       } else {
         console.error('❌ HTTP ошибка:', e.message);
         return null;
@@ -56,54 +56,72 @@ async function safeGet(url, params = {}) {
   return null;
 }
 
-// ---------------- helpers ----------------
-const toFriendlyAddress = raw =>
-  Address.parse(raw).toString({ urlSafe: true });
+// -------------------- TON address → friendly --------------------
+function toFriendlyAddress(rawAddress) {
+  try {
+    return Address.parse(rawAddress).toString({ urlSafe: true });
+  } catch {
+    return null;
+  }
+}
 
-const getSaleLink = nft =>
-  nft?.address ? `https://getgems.io/nft/${toFriendlyAddress(nft.address)}` : null;
+// -------------------- Getgems link --------------------
+function getSaleLink(nft) {
+  if (!nft?.address) return null;
+  const friendly = toFriendlyAddress(nft.address);
+  return friendly ? `https://getgems.io/nft/${friendly}` : null;
+}
 
-const getBestImage = nft =>
-  nft?.previews
-    ?.filter(p => p.url?.startsWith('https://'))
-    .sort((a, b) => Number(b.resolution.split('x')[0]) - Number(a.resolution.split('x')[0]))[0]?.url || null;
-
-// ---------------- NFT API ----------------
-const getLastNftAddresses = async (limit = 5) => {
+// -------------------- last NFT addresses --------------------
+async function getLastNftAddresses(limit = 10) {
   const data = await safeGet(`https://tonapi.io/v2/accounts/${ACCOUNT_ID}/nfts/history`, { limit });
-  return data?.operations?.map(op => op.item?.address).filter(Boolean) || [];
-};
+  if (!data) return [];
+  return (data.operations ?? []).map(op => op.item?.address).filter(Boolean);
+}
 
-const getNftData = async (id) =>
-  await safeGet(`https://tonapi.io/v2/nfts/${id}`);
+// -------------------- NFT data --------------------
+async function getNftData(nftId) {
+  return await safeGet(`https://tonapi.io/v2/nfts/${nftId}`);
+}
 
-// ---------------- бонус за числа ----------------
-function getNumberPowerBonus(nft) {
+// -------------------- best image --------------------
+function getBestImage(nft) {
+  if (!Array.isArray(nft.previews)) return null;
+  return nft.previews
+    .filter(p => p.url?.startsWith('https://'))
+    .sort((a, b) => Number(b.resolution.split('x')[0]) - Number(a.resolution.split('x')[0]))[0]?.url || null;
+}
+
+// -------------------- бонус за числа --------------------
+function getNumberPowerBonus(nft, powerDb) {
   let bonus = 0;
   const textToScan = [
     nft.metadata?.name || '',
     ...(Array.isArray(nft.metadata?.attributes) ? nft.metadata.attributes.map(a => a.value) : [])
   ].join(' ');
 
-  for (const np of POWER_DB.number_power) {
+  for (const np of powerDb.number_power) {
     const regex = new RegExp(`\\b${np.sticker_number}\\b`, 'g');
-    if (regex.test(textToScan)) bonus += np.power;
+    if (regex.test(textToScan)) {
+      bonus += np.power;
+    }
   }
 
   return bonus;
 }
 
-// ---------------- send NFT ----------------
+// -------------------- send NFT с учетом синергии и Number --------------------
 async function sendNft(nft) {
-  const image = getBestImage(nft);
-  if (!image) return;
+  if (!chatId || !nft) return;
 
   let name = nft.metadata?.name || 'Без названия';
   const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
+  const image = getBestImage(nft);
   const saleLink = getSaleLink(nft);
+  if (!image) return;
 
-  let totalPower = 0;
   let attributesText = '';
+  let totalPower = 0;
   const attrNamesForSynergy = [];
   const attrMap = {};
 
@@ -113,7 +131,7 @@ async function sendNft(nft) {
       if (type.toLowerCase().includes('earring') && POWER_DB.attributes['Earrings']) type = 'Earrings';
       if (type.toLowerCase().includes('cap') && POWER_DB.attributes['Cap']) type = 'Cap';
 
-      const attrPowerObj = POWER_DB.attributes[type]?.find(x => x.name === a.value);
+      const attrPowerObj = POWER_DB.attributes[type]?.find(attr => attr.name === a.value);
       const power = attrPowerObj ? attrPowerObj.power : 0;
       totalPower += power;
       attrMap[a.value] = type;
@@ -122,7 +140,7 @@ async function sendNft(nft) {
     });
   }
 
-  // --------- синергия ---------
+  // --------- расчет синергии ---------
   const synergyAttrSet = new Set();
   for (let i = 0; i < attrNamesForSynergy.length; i++) {
     const words1 = attrNamesForSynergy[i].split(/\s+/);
@@ -146,22 +164,24 @@ async function sendNft(nft) {
     nft.metadata.attributes.forEach(a => {
       const power = POWER_DB.attributes[attrMap[a.value]]?.find(attr => attr.name === a.value)?.power || 0;
       const isSynergy = synergyAttrSet.has(a.value);
-      attributesText += `• ${a.trait_type}: ${a.value} ⚡${power} ${isSynergy ? '(Synergy)' : ''}\n`;
+      attributesText += `• ${a.trait_type}: ${a.value}⚡${power} ${isSynergy ? ' (Synergy)' : ''}\n`;
     });
   }
 
   if (synergyCount === 0) name += ' (без Synergy)';
 
-  // --------- бонус за Number ---------
-  const numberBonus = getNumberPowerBonus(nft);
-  const totalPowerFinal = totalPower + synergyBonus + numberBonus;
+  const totalPowerWithSynergy = totalPower + synergyBonus;
+
+  // --------- бонус за числа ---------
+  const numberBonus = getNumberPowerBonus(nft, POWER_DB);
+  const totalPowerFinal = totalPowerWithSynergy + numberBonus;
 
   let numberTextTop = '';
   if (numberBonus === 500) numberTextTop = '💥 Крутой номер!';
   else if (numberBonus === 1000) numberTextTop = '🔥 Невероятный номер!';
   else if (numberBonus === 5000) numberTextTop = '🍀 Самый счастливый номер!';
 
-  let powerText = `⚡${totalPower + synergyBonus}`;
+  let powerText = `⚡${totalPowerWithSynergy}`;
   const bonusParts = [];
   if (synergyBonus) bonusParts.push(`Synergy +${synergyBonus}`);
   if (numberBonus) bonusParts.push(`Bonus за Number +${numberBonus}`);
@@ -170,135 +190,119 @@ async function sendNft(nft) {
   const caption = `
 ${numberTextTop ? numberTextTop + '\n' : ''}
 🖼 <b>${name}</b>
-💰 Цена: ${price ? price + ' TON' : 'pending'}
+💰 Цена: ${price ? price + ' TON' : 'в pending'}
 <b>💪 Общая сила: ${powerText}</b>
 
 ${saleLink ? `🛒 <a href="${saleLink}">Купить на Getgems</a>\n` : ''}
 ${attributesText.trim()}
 `.trim();
 
-  await bot.sendPhoto(CHAT_ID, image, {
+  await bot.sendPhoto(chatId, image, {
     caption,
     parse_mode: 'HTML',
-    disable_web_page_preview: true
+    disable_web_page_preview: true,
   });
 
-  lastSendTime = Date.now();
-  console.log(`✅ NFT отправлена | ${name} | Power: ${totalPowerFinal}`);
+  console.log(`✅ NFT ПОКАЗАНА | ${name} | ${price ? price + ' TON' : 'pending'} | Power: ${totalPowerFinal}`);
 }
 
-// ---------------- queue ----------------
+// -------------------- очередь отправки --------------------
 async function processSendQueue() {
-  if (sending || !sendQueue.length) return;
+  if (sending || sendQueue.length === 0) return;
   sending = true;
 
-  try {
-    while (sendQueue.length) {
-      const nft = sendQueue.shift();
-      await sendNft(nft);
-      await new Promise(r => setTimeout(r, 1500));
-    }
-  } catch (e) {
-    console.error('❌ Ошибка sendQueue:', e.message);
+  while (sendQueue.length > 0) {
+    const nft = sendQueue.shift();
+    await sendNft(nft);
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   sending = false;
 }
 
-// ---------------- check NFT ----------------
+// -------------------- check new NFT --------------------
 async function checkNft() {
-  try {
-    const list = await getLastNftAddresses();
+  const nftAddresses = await getLastNftAddresses(5);
 
-    for (const addr of list) {
-      const key = addr.toLowerCase();
-      if (ignoredNfts.has(key)) continue;
+  for (const addrRaw of nftAddresses) {
+    const normalizedAddress = addrRaw.trim().toLowerCase();
+    if (ignoredNfts.has(normalizedAddress)) continue;
 
-      const nft = await getNftData(addr);
-      if (!nft) continue;
+    const nft = await getNftData(addrRaw);
+    if (!nft) continue;
 
-      if (nft.collection?.name !== TARGET_COLLECTION) {
-        ignoredNfts.add(key);
-        console.log(`❌ NFT ПРОПУЩЕНА | ${nft.metadata?.name || 'Без названия'} | другая коллекция`);
-        continue;
-      }
-
-      const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
-      const nftKey = `${key}_${price ?? 'pending'}`;
-
-      if (sentNfts.has(nftKey) && Date.now() - sentNfts.get(nftKey) < SENT_TTL) continue;
-
-      if (!price) {
-        pendingQueue[key] = Date.now();
-        continue;
-      }
-
-      sendQueue.push(nft);
-      sentNfts.set(nftKey, Date.now());
-      delete pendingQueue[key];
-    }
-  } catch (e) {
-    console.error('❌ checkNft ошибка:', e.message);
-  }
-}
-
-// ---------------- pending ----------------
-async function processPending() {
-  const now = Date.now();
-
-  for (const key of Object.keys(pendingQueue)) {
-    if (now - pendingQueue[key] > MAX_PENDING_TIME) {
-      delete pendingQueue[key];
-      ignoredNfts.add(key);
+    const collectionName = nft.collection?.name?.trim();
+    if (collectionName !== TARGET_COLLECTION) {
+      ignoredNfts.add(normalizedAddress);
+      console.log(`❌ NFT ПРОПУЩЕНА | ${nft.metadata?.name || 'Без названия'} | другая коллекция`);
       continue;
     }
 
-    const nft = await getNftData(key);
+    const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
+    const nftKey = `${normalizedAddress}_${price ?? 'pending'}`;
+
+    if (sentNfts.has(nftKey) && Date.now() - sentNfts.get(nftKey) < SENT_TTL) continue;
+
+    if (!price) {
+      pendingQueue[addrRaw] = Date.now();
+      continue;
+    }
+
+    sendQueue.push(nft);
+    sentNfts.set(nftKey, Date.now());
+    delete pendingQueue[addrRaw];
+  }
+}
+
+// -------------------- process pending --------------------
+async function processPending() {
+  const now = Date.now();
+
+  for (const addrRaw of Object.keys(pendingQueue)) {
+    const normalizedAddress = addrRaw.trim().toLowerCase();
+
+    if (now - pendingQueue[addrRaw] > MAX_PENDING_TIME) {
+      delete pendingQueue[addrRaw];
+      ignoredNfts.add(normalizedAddress);
+      continue;
+    }
+
+    const nft = await getNftData(addrRaw);
     if (!nft) continue;
 
     const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
-    if (price) sendQueue.push(nft);
+    const nftKey = `${normalizedAddress}_${price ?? 'pending'}`;
+
+    if (price && (!sentNfts.has(nftKey) || Date.now() - sentNfts.get(nftKey) > SENT_TTL)) {
+      sendQueue.push(nft);
+      sentNfts.set(nftKey, Date.now());
+      delete pendingQueue[addrRaw];
+    }
   }
 }
 
-// ---------------- watchdog ----------------
-setInterval(() => {
-  if (Date.now() - lastSendTime > 10 * 60 * 1000 && nftInterval) {
-    console.warn('♻️ Watchdog: перезапуск NFT');
-    stopNft();
-    startNft();
+// -------------------- команды --------------------
+bot.onText(/\/start_nft/, (msg) => {
+  chatId = msg.chat.id;
+  if (!nftInterval) {
+    nftInterval = setInterval(checkNft, 1000);
+    pendingInterval = setInterval(processPending, 1000);
+    setInterval(processSendQueue, 500);
+    bot.sendMessage(chatId, '🚀 NFT отслеживание запущено');
+  } else {
+    bot.sendMessage(chatId, '⚠️ Уже запущено');
   }
-}, 60_000);
+});
 
-// ---------------- commands ----------------
-function startNft() {
-  if (nftInterval) return;
-
-  nftInterval = setInterval(checkNft, 2000);
-  pendingInterval = setInterval(processPending, 3000);
-  sendInterval = setInterval(processSendQueue, 1000);
-
-  bot.sendMessage(CHAT_ID, '🚀 NFT отслеживание запущено');
-}
-
-function stopNft() {
-  clearInterval(nftInterval);
-  clearInterval(pendingInterval);
-  clearInterval(sendInterval);
-  nftInterval = pendingInterval = sendInterval = null;
-  bot.sendMessage(CHAT_ID, '🛑 NFT отслеживание остановлено');
-}
-
-bot.onText(/\/start_nft/, startNft);
-bot.onText(/\/stop_nft/, stopNft);
-
-// ---------------- delete user messages (не команды) ----------------
-bot.on('message', async (msg) => {
-  if (!msg.text || msg.text.startsWith('/')) return;
-  if (msg.from.is_bot) return;
-
-  try {
-    await bot.deleteMessage(msg.chat.id, msg.message_id);
-    console.log(`🗑 Удалено сообщение от ${msg.from.first_name}`);
-  } catch {}
+bot.onText(/\/stop_nft/, (msg) => {
+  chatId = msg.chat.id;
+  if (nftInterval) {
+    clearInterval(nftInterval);
+    clearInterval(pendingInterval);
+    nftInterval = null;
+    pendingInterval = null;
+    bot.sendMessage(chatId, '🛑 NFT отслеживание остановлено');
+  } else {
+    bot.sendMessage(chatId, '⚠️ Не запущено');
+  }
 });
