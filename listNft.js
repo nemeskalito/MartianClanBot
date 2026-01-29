@@ -9,7 +9,6 @@ const bot = new TelegramBot(process.env.API_TOKEN2, { polling: true });
 const ACCOUNT_ID = '0:39d63083e48f46452ff8a04cd0d3733a90c8be299aa5951b62741759b2c17e0e';
 const TARGET_COLLECTION = 'Unstoppable Tribe from ZarGates';
 
-let chatId = null;
 const pendingQueue = {};
 const sentNfts = new Map();
 const ignoredNfts = new Set();
@@ -20,14 +19,10 @@ let sending = false;
 let nftInterval = null;
 let pendingInterval = null;
 
+const CHAT_ID = -1003706111240;
 const MAX_PENDING_TIME = 5 * 60 * 1000; // 5 минут
 const SENT_TTL = 10 * 60 * 1000; // повторно показывать NFT через 10 минут
 let last429Log = 0;
-
-// -------------------- chatId --------------------
-bot.on('message', (msg) => {
-  chatId = msg.chat.id;
-});
 
 // -------------------- safe GET с backoff --------------------
 async function safeGet(url, params = {}) {
@@ -112,7 +107,7 @@ function getNumberPowerBonus(nft, powerDb) {
 
 // -------------------- send NFT с учетом синергии и Number --------------------
 async function sendNft(nft) {
-  if (!chatId || !nft) return;
+  if (!CHAT_ID || !nft) return;
 
   let name = nft.metadata?.name || 'Без названия';
   const price = nft.sale ? Number(nft.sale.price.value) / 1e9 : null;
@@ -140,8 +135,8 @@ async function sendNft(nft) {
     });
   }
 
-  // --------- расчет синергии ---------
-  const synergyAttrSet = new Set();
+// --------- расчет синергии ---------
+  const synergyAttrList = []; // заменяем Set на массив
   for (let i = 0; i < attrNamesForSynergy.length; i++) {
     const words1 = attrNamesForSynergy[i].split(/\s+/);
     for (let j = i + 1; j < attrNamesForSynergy.length; j++) {
@@ -149,42 +144,42 @@ async function sendNft(nft) {
       if (words1.some(w1 => words2.some(w2 =>
         POWER_DB.synergy.some(s => w1.toLowerCase().startsWith(s.toLowerCase()) && w2.toLowerCase().startsWith(s.toLowerCase()))
       ))) {
-        synergyAttrSet.add(attrNamesForSynergy[i]);
-        synergyAttrSet.add(attrNamesForSynergy[j]);
+        synergyAttrList.push(attrNamesForSynergy[i]);
+        synergyAttrList.push(attrNamesForSynergy[j]);
       }
     }
   }
-
+  
   let synergyBonus = 0;
-  const synergyCount = synergyAttrSet.size;
+  const synergyCount = synergyAttrList.length; // теперь учитываем все повторения
   if (synergyCount === 2) synergyBonus = 100;
   else if (synergyCount >= 3) synergyBonus = 300;
-
+  
   if (Array.isArray(nft.metadata?.attributes)) {
     nft.metadata.attributes.forEach(a => {
       const power = POWER_DB.attributes[attrMap[a.value]]?.find(attr => attr.name === a.value)?.power || 0;
-      const isSynergy = synergyAttrSet.has(a.value);
+      const isSynergy = synergyAttrList.includes(a.value); // проверка через массив
       attributesText += `• ${a.trait_type}: ${a.value}⚡${power} ${isSynergy ? ' (Synergy)' : ''}\n`;
     });
   }
-
+  
   if (synergyCount === 0) name += ' (без Synergy)';
-
-  const totalPowerWithSynergy = totalPower + synergyBonus;
-
+  
   // --------- бонус за числа ---------
   const numberBonus = getNumberPowerBonus(nft, POWER_DB);
-  const totalPowerFinal = totalPowerWithSynergy + numberBonus;
-
+  const totalPowerFinal = totalPower + synergyBonus + numberBonus;
+	
   let numberTextTop = '';
   if (numberBonus === 500) numberTextTop = '💥 Крутой номер!';
   else if (numberBonus === 1000) numberTextTop = '🔥 Невероятный номер!';
   else if (numberBonus === 5000) numberTextTop = '🍀 Самый счастливый номер!';
 
-  let powerText = `⚡${totalPowerWithSynergy}`;
+  let powerText = `⚡${totalPowerFinal}`;
   const bonusParts = [];
-  if (synergyBonus) bonusParts.push(`Synergy +${synergyBonus}`);
-  if (numberBonus) bonusParts.push(`Bonus за Number +${numberBonus}`);
+  if (synergyBonus && !numberBonus) bonusParts.push(`в том числе Synergy +${synergyBonus}`);
+  if (numberBonus && !synergyBonus) bonusParts.push(`в том числе Number +${numberBonus}`);
+  if (numberBonus && synergyBonus) bonusParts.push(`в том числе Synergy +${synergyBonus} и Number +${numberBonus}`);
+
   if (bonusParts.length) powerText += ` (${bonusParts.join(', ')})`;
 
   const caption = `
@@ -197,7 +192,7 @@ ${saleLink ? `🛒 <a href="${saleLink}">Купить на Getgems</a>\n` : ''}
 ${attributesText.trim()}
 `.trim();
 
-  await bot.sendPhoto(chatId, image, {
+  await bot.sendPhoto(CHAT_ID, image, {
     caption,
     parse_mode: 'HTML',
     disable_web_page_preview: true,
@@ -283,26 +278,27 @@ async function processPending() {
 
 // -------------------- команды --------------------
 bot.onText(/\/start_nft/, (msg) => {
-  chatId = msg.chat.id;
+  if (msg.chat.id !== CHAT_ID) return
+
   if (!nftInterval) {
     nftInterval = setInterval(checkNft, 1000);
     pendingInterval = setInterval(processPending, 1000);
     setInterval(processSendQueue, 500);
-    bot.sendMessage(chatId, '🚀 NFT отслеживание запущено');
+    bot.sendMessage(CHAT_ID, '🚀 NFT отслеживание запущено');
   } else {
-    bot.sendMessage(chatId, '⚠️ Уже запущено');
+    bot.sendMessage(CHAT_ID, '⚠️ Уже запущено');
   }
 });
 
 bot.onText(/\/stop_nft/, (msg) => {
-  chatId = msg.chat.id;
+  if (msg.chat.id !== CHAT_ID) return
   if (nftInterval) {
     clearInterval(nftInterval);
     clearInterval(pendingInterval);
     nftInterval = null;
     pendingInterval = null;
-    bot.sendMessage(chatId, '🛑 NFT отслеживание остановлено');
+    bot.sendMessage(CHAT_ID, '🛑 NFT отслеживание остановлено');
   } else {
-    bot.sendMessage(chatId, '⚠️ Не запущено');
+    bot.sendMessage(CHAT_ID, '⚠️ Не запущено');
   }
 });
