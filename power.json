@@ -45,7 +45,7 @@
     ],
     "Stick": [
       { "id": 1, "name": "Traffic Police Baton", "rarity": "Mythic", "power": 500 },
-      { "id": 2, "name": "WC Sign", "rarity": "Legendary", "power": 50 },
+      { "id": 2, "name": "WС Sign", "rarity": "Legendary", "power": 50 },
       { "id": 3, "name": "Stop Sign", "rarity": "Legendary", "power": 50 },
       { "id": 4, "name": "Bat", "rarity": "Legendary", "power": 50 },
       { "id": 5, "name": "Golf Club", "rarity": "Legendary", "power": 50 },
