@@ -20,7 +20,6 @@ let nftInterval = null;
 let pendingInterval = null;
 
 const CHAT_ID = -5167475637;
-const MIN_PENDING_AFTER_PRICE = 10 * 1000; // 10 секунд
 const MAX_PENDING_TIME = 5 * 60 * 1000; // 5 минут
 const SENT_TTL = 10 * 60 * 1000; // повторно показывать NFT через 10 минут
 let last429Log = 0;
@@ -205,12 +204,15 @@ ${attributesText.trim()}
 // -------------------- очередь отправки --------------------
 async function processSendQueue() {
   if (sending || sendQueue.length === 0) return;
-  sending = true;
-
+	sending = true;
+	 // СИЛЬНАЯ ПАУЗА 10 СЕКУНД
+  console.log('⏸ Ждем 10 секунд перед отправкой в Telegram...');
+  await new Promise(r => setTimeout(r, 10000));
+  console.log(`📦 Начинаю отправку ${sendQueue.length} NFT...`);
+	
   while (sendQueue.length > 0) {
     const nft = sendQueue.shift();
     await sendNft(nft);
-    await new Promise(r => setTimeout(r, 10000));
   }
 
   sending = false;
@@ -270,13 +272,9 @@ async function processPending() {
     const nftKey = `${normalizedAddress}_${price ?? 'pending'}`;
 
     if (price && (!sentNfts.has(nftKey) || Date.now() - sentNfts.get(nftKey) > SENT_TTL)) {
-      // проверяем, сколько прошло с момента появления цены
-      const pendingTime = Date.now() - pendingQueue[addrRaw];
-      if (pendingTime >= MIN_PENDING_AFTER_PRICE) { // 10000 = 10 секунд
-        sendQueue.push(nft);
-        sentNfts.set(nftKey, Date.now());
-        delete pendingQueue[addrRaw];
-      }
+      sendQueue.push(nft);
+      sentNfts.set(nftKey, Date.now());
+      delete pendingQueue[addrRaw];
     }
   }
 }
