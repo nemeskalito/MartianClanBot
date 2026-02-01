@@ -4,7 +4,7 @@ const { Address } = require('ton');
 require('dotenv').config();
 const POWER_DB = require('./power.json');
 
-const bot = new TelegramBot(process.env.API_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.API_TEST, { polling: true });
 
 const ACCOUNT_ID = '0:39d63083e48f46452ff8a04cd0d3733a90c8be299aa5951b62741759b2c17e0e';
 const TARGET_COLLECTION = 'Unstoppable Tribe from ZarGates';
@@ -19,7 +19,7 @@ let sending = false;
 let nftInterval = null;
 let pendingInterval = null;
 
-const CHAT_ID = -1003888068464;
+const CHAT_ID = -5013340639
 const MAX_PENDING_TIME = 5 * 60 * 1000; // 5 минут
 const SENT_TTL = 10 * 60 * 1000; // повторно показывать NFT через 10 минут
 let last429Log = 0;
@@ -176,20 +176,25 @@ async function sendNft(nft) {
 
   let powerText = `⚡${totalPowerFinal}`;
   const bonusParts = [];
-  if (synergyBonus && !numberBonus) bonusParts.push(`в том числе Synergy +${synergyBonus}`);
-  if (numberBonus && !synergyBonus) bonusParts.push(`в том числе Number +${numberBonus}`);
-  if (numberBonus && synergyBonus) bonusParts.push(`в том числе Synergy +${synergyBonus} и Number +${numberBonus}`);
+  if (synergyBonus && !numberBonus) bonusParts.push(`Synergy +${synergyBonus}`);
+  if (numberBonus && !synergyBonus) bonusParts.push(`Number +${numberBonus}`);
+  if (numberBonus && synergyBonus) bonusParts.push(`Synergy +${synergyBonus} и Number +${numberBonus}`);
 
   if (bonusParts.length) powerText += ` (${bonusParts.join(', ')})`;
 
   const caption = `
-${numberTextTop ? numberTextTop + '\n' : ''}
+━━━━━━━━━━━━━━━━
+🔥 NFT СИГНАЛ
+
 🖼 <b>${name}</b>
 💰 Цена: ${price ? price + ' TON' : 'в pending'}
 <b>💪 Общая сила: ${powerText}</b>
 
 ${saleLink ? `🛒 <a href="${saleLink}">Купить на Getgems</a>\n` : ''}
+🎭 Атрибуты:
 ${attributesText.trim()}
+${numberTextTop ? numberTextTop + '\n' : ''}
+━━━━━━━━━━━━━━━━
 `.trim();
 
   await bot.sendPhoto(CHAT_ID, image, {
@@ -204,15 +209,12 @@ ${attributesText.trim()}
 // -------------------- очередь отправки --------------------
 async function processSendQueue() {
   if (sending || sendQueue.length === 0) return;
-	sending = true;
-	 // СИЛЬНАЯ ПАУЗА 10 СЕКУНД
-  console.log('⏸ Ждем 10 секунд перед отправкой в Telegram...');
-  await new Promise(r => setTimeout(r, 10000));
-  console.log(`📦 Начинаю отправку ${sendQueue.length} NFT...`);
-	
+  sending = true;
+
   while (sendQueue.length > 0) {
     const nft = sendQueue.shift();
     await sendNft(nft);
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   sending = false;
@@ -220,7 +222,7 @@ async function processSendQueue() {
 
 // -------------------- check new NFT --------------------
 async function checkNft() {
-  const nftAddresses = await getLastNftAddresses(10);
+  const nftAddresses = await getLastNftAddresses(5);
 
   for (const addrRaw of nftAddresses) {
     const normalizedAddress = addrRaw.trim().toLowerCase();
@@ -282,7 +284,7 @@ async function processPending() {
 // -------------------- команды --------------------
 bot.onText(/\/start_nft/, (msg) => {
   if (msg.chat.id !== CHAT_ID) return
-	console.log(msg.chat.id)
+
   if (!nftInterval) {
     nftInterval = setInterval(checkNft, 1000);
     pendingInterval = setInterval(processPending, 1000);
@@ -305,6 +307,23 @@ bot.onText(/\/stop_nft/, (msg) => {
     bot.sendMessage(CHAT_ID, '⚠️ Не запущено');
   }
 });
-bot.on('message', msg => {
-  console.log('MESSAGE FROM:', msg.chat.id, msg.text);
-});
+
+
+async function setMenuButton() {
+  try {
+    await bot.callApi('setChatMenuButton', {
+      chat_id: -5013340639, // ID группы
+      menu_button: {
+        type: 'web_app',
+        text: 'NFT Interface',
+        web_app: { url: 'https://getgems.io/' }
+      }
+    });
+    console.log('✅ Кнопка Web App установлена в группе');
+  } catch (err) {
+    console.error('❌ Ошибка установки кнопки:', err.response?.data || err.message);
+  }
+}
+
+// Вызов функции
+setMenuButton();
