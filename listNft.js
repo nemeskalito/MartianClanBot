@@ -4,7 +4,9 @@ const { Address } = require('ton');
 require('dotenv').config();
 const POWER_DB = require('./power.json');
 
-const bot = new TelegramBot(process.env.API_TOKEN2, { polling: true });
+const API_TOKEN = "8326803180:AAEImx2vH3g6phOwR8Se1iY0UxQCQ19puyA"
+
+const bot = new TelegramBot(API_TOKEN, { polling: true });
 
 const ACCOUNT_ID = '0:39d63083e48f46452ff8a04cd0d3733a90c8be299aa5951b62741759b2c17e0e';
 const TARGET_COLLECTION = 'Unstoppable Tribe from ZarGates';
