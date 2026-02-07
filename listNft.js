@@ -304,3 +304,11 @@ bot.onText(/\/stop_nft/, (msg) => {
 });
 process.on('uncaughtException', e => console.error('UNCAUGHT:', e));
 process.on('unhandledRejection', e => console.error('UNHANDLED REJECTION:', e));
+
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => res.send('Bot is alive!'));
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server running on port ${port}`));
