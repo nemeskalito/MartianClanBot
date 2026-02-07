@@ -302,3 +302,5 @@ bot.onText(/\/stop_nft/, (msg) => {
     bot.sendMessage(CHAT_ID, '⚠️ Не запущено');
   }
 });
+process.on('uncaughtException', e => console.error('UNCAUGHT:', e));
+process.on('unhandledRejection', e => console.error('UNHANDLED REJECTION:', e));
